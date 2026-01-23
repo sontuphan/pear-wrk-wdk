@@ -1,12 +1,28 @@
 // External dependencies
-const { entropyToMnemonic, mnemonicToSeedSync, mnemonicToEntropy } = require('@scure/bip39')
+const {
+  entropyToMnemonic,
+  mnemonicToSeedSync,
+  mnemonicToEntropy,
+} = require('@scure/bip39')
 const { wordlist } = require('@scure/bip39/wordlists/english')
 
 // Internal dependencies - utilities
 const logger = require('./utils/logger')
 const { safeStringify } = require('./utils/safe-stringify')
-const { validateNonEmptyString, validateNonNegativeInteger, validateBase64, validateJSON, validateMnemonic, validateWordCount } = require('./utils/validation')
-const { memzero, decrypt, generateEntropy, encryptSecrets } = require('./utils/crypto')
+const {
+  validateNonEmptyString,
+  validateNonNegativeInteger,
+  validateBase64,
+  validateJSON,
+  validateMnemonic,
+  validateWordCount,
+} = require('./utils/validation')
+const {
+  memzero,
+  decrypt,
+  generateEntropy,
+  encryptSecrets,
+} = require('./utils/crypto')
 
 // Internal dependencies - exceptions
 const ERROR_CODES = require('./exceptions/error-codes')
@@ -38,7 +54,7 @@ const validateRequest = (request, validationFn, fieldName = 'Request') => {
     error.code = ERROR_CODES.BAD_REQUEST
     throw error
   }
-  
+
   // Execute validation function and wrap errors with BAD_REQUEST code
   try {
     validationFn()
@@ -63,7 +79,10 @@ const withErrorHandling = (handler, defaultErrorCode) => {
       return await handler(...args)
     } catch (error) {
       // Create structured error response
-      const structuredError = rpcException.createStructuredError(error, defaultErrorCode)
+      const structuredError = rpcException.createStructuredError(
+        error,
+        defaultErrorCode,
+      )
       // Throw as Error with structured data in message (for RPC transport)
       // The RPC layer will handle serialization
       const errorMessage = JSON.stringify(structuredError)
@@ -75,7 +94,7 @@ const withErrorHandling = (handler, defaultErrorCode) => {
 /**
  * Generalized function to call any WDK account method
  * This provides a dev-friendly way to call account methods without needing individual handlers
- * 
+ *
  * @param {Object} context - Context object containing wdk instance
  * @param {string} methodName - The method name to call on the account (e.g., 'getAddress', 'getBalance')
  * @param {string} network - Network name (e.g., 'ethereum', 'spark')
@@ -86,49 +105,64 @@ const withErrorHandling = (handler, defaultErrorCode) => {
  * @param {any} options.defaultValue - Default value to return if method doesn't exist
  * @returns {Promise<any>} The result from the account method
  */
-const callWdkMethod = async (context, methodName, network, accountIndex, args = null, options = {}) => {
+const callWdkMethod = async (
+  context,
+  methodName,
+  network,
+  accountIndex,
+  args = null,
+  options = {},
+) => {
   const { wdk } = context
-  
+
   if (!wdk) {
-    throw createErrorWithCode('WDK not initialized. Call initializeWDK first.', ERROR_CODES.WDK_MANAGER_INIT)
+    throw createErrorWithCode(
+      'WDK not initialized. Call initializeWDK first.',
+      ERROR_CODES.WDK_MANAGER_INIT,
+    )
   }
-  
+
   // Validate network parameter
   if (!network || typeof network !== 'string' || network.trim().length === 0) {
-    throw createErrorWithCode('Network must be a non-empty string', ERROR_CODES.BAD_REQUEST)
+    throw createErrorWithCode(
+      'Network must be a non-empty string',
+      ERROR_CODES.BAD_REQUEST,
+    )
   }
-  
+
   let account
   try {
     account = await wdk.getAccount(network, accountIndex)
   } catch (error) {
     throw createErrorWithCode(
       `Failed to get account for network "${network}" at index ${accountIndex}: ${error.message}`,
-      ERROR_CODES.ACCOUNT_BALANCES
+      ERROR_CODES.ACCOUNT_BALANCES,
     )
   }
-  
+
   if (typeof account[methodName] !== 'function') {
     if (options.defaultValue !== undefined) {
-      logger.warn(`${methodName} not available for network: ${network}, returning default value`)
+      logger.warn(
+        `${methodName} not available for network: ${network}, returning default value`,
+      )
       return options.defaultValue
     }
     const availableMethods = Object.keys(account)
-      .filter(key => typeof account[key] === 'function')
+      .filter((key) => typeof account[key] === 'function')
       .join(', ')
     throw createErrorWithCode(
       `Method "${methodName}" not found on account for network "${network}". ` +
-      `Available methods: ${availableMethods}`,
-      ERROR_CODES.BAD_REQUEST
+        `Available methods: ${availableMethods}`,
+      ERROR_CODES.BAD_REQUEST,
     )
   }
-  
+
   const result = await account[methodName](args)
-  
+
   if (options.transformResult) {
     return options.transformResult(result)
   }
-  
+
   return result
 }
 
@@ -144,7 +178,7 @@ const callWdkMethod = async (context, methodName, network, accountIndex, args = 
  */
 function registerRpcHandlers(rpc, context) {
   const { WDK, walletManagers, requiredNetworks, wdkLoadError } = context
-  
+
   // Create a context object that will be passed to handlers
   // This allows handlers to read and update the wdk state
   const handlerContext = {
@@ -153,211 +187,260 @@ function registerRpcHandlers(rpc, context) {
     },
     set wdk(value) {
       context.wdk = value
-    }
+    },
   }
 
   /**
    * Generate entropy and encrypt seed buffer and entropy
    */
-  rpc.onWorkletStart(withErrorHandling(async (init) => {
-    // workletStart no longer initializes WDK - that's done via initializeWDK
-    return { status: 'started' }
-  }))
+  rpc.onWorkletStart(
+    withErrorHandling(async (init) => {
+      // workletStart no longer initializes WDK - that's done via initializeWDK
+      return { status: 'started' }
+    }),
+  )
 
   /**
    * Generate entropy and encrypt seed buffer and entropy
    */
-  rpc.onGenerateEntropyAndEncrypt(withErrorHandling(async (request) => {
-    const { wordCount } = request
-    
-    // Validate request and word count
-    validateRequest(request, () => validateWordCount(wordCount, 'wordCount'))
-    
-    // Generate entropy
-    const entropy = generateEntropy(wordCount)
-    
-    // Generate mnemonic from entropy
-    const mnemonic = entropyToMnemonic(entropy, wordlist)
-    
-    const seedBuffer = mnemonicToSeedSync(mnemonic)
-    const entropyBuffer = Buffer.from(entropy)
-    
-    // Encrypt both secrets using the helper function
-    const { encryptionKey, encryptedSeedBuffer, encryptedEntropyBuffer } = encryptSecrets(seedBuffer, entropyBuffer)
-    
-    // Zero out sensitive buffers
-    memzero(entropy)
-    memzero(seedBuffer)
-    memzero(entropyBuffer)
-    
-    return {
-      encryptionKey,
-      encryptedSeedBuffer,
-      encryptedEntropyBuffer
-    }
-  }))
+  rpc.onGenerateEntropyAndEncrypt(
+    withErrorHandling(async (request) => {
+      const { wordCount } = request
+
+      // Validate request and word count
+      validateRequest(request, () => validateWordCount(wordCount, 'wordCount'))
+
+      // Generate entropy
+      const entropy = generateEntropy(wordCount)
+
+      // Generate mnemonic from entropy
+      const mnemonic = entropyToMnemonic(entropy, wordlist)
+
+      const seedBuffer = mnemonicToSeedSync(mnemonic)
+      const entropyBuffer = Buffer.from(entropy)
+
+      // Encrypt both secrets using the helper function
+      const { encryptionKey, encryptedSeedBuffer, encryptedEntropyBuffer } =
+        encryptSecrets(seedBuffer, entropyBuffer)
+
+      // Zero out sensitive buffers
+      memzero(entropy)
+      memzero(seedBuffer)
+      memzero(entropyBuffer)
+
+      return {
+        encryptionKey,
+        encryptedSeedBuffer,
+        encryptedEntropyBuffer,
+      }
+    }),
+  )
 
   /**
    * Get mnemonic phrase from encrypted entropy
    */
-  rpc.onGetMnemonicFromEntropy(withErrorHandling(async (request) => {
-    const { encryptedEntropy, encryptionKey } = request
-    
-    // Validate request and inputs
-    validateRequest(request, () => {
-      validateBase64(encryptedEntropy, 'encryptedEntropy')
-      validateBase64(encryptionKey, 'encryptionKey')
-    })
-    
-    // Decrypt entropy
-    const entropyBuffer = decrypt(encryptedEntropy, encryptionKey)
-    // Create a new Uint8Array and copy bytes explicitly for @scure/bip39 compatibility
-    const entropy = new Uint8Array(entropyBuffer.length)
-    entropy.set(entropyBuffer)
-    
-    // Convert entropy to mnemonic
-    const mnemonic = entropyToMnemonic(entropy, wordlist)
-    
-    // Zero out sensitive buffers
-    memzero(entropyBuffer)
-    memzero(entropy)
-    
-    return { mnemonic }
-  }))
+  rpc.onGetMnemonicFromEntropy(
+    withErrorHandling(async (request) => {
+      const { encryptedEntropy, encryptionKey } = request
+
+      // Validate request and inputs
+      validateRequest(request, () => {
+        validateBase64(encryptedEntropy, 'encryptedEntropy')
+        validateBase64(encryptionKey, 'encryptionKey')
+      })
+
+      // Decrypt entropy
+      const entropyBuffer = decrypt(encryptedEntropy, encryptionKey)
+      // Create a new Uint8Array and copy bytes explicitly for @scure/bip39 compatibility
+      const entropy = new Uint8Array(entropyBuffer.length)
+      entropy.set(entropyBuffer)
+
+      // Convert entropy to mnemonic
+      const mnemonic = entropyToMnemonic(entropy, wordlist)
+
+      // Zero out sensitive buffers
+      memzero(entropyBuffer)
+      memzero(entropy)
+
+      return { mnemonic }
+    }),
+  )
 
   /**
    * RPC handler: Convert mnemonic phrase to encrypted seed and entropy
-   * 
-   * Takes a BIP39 mnemonic phrase and derives both the seed (used by WDK) 
+   *
+   * Takes a BIP39 mnemonic phrase and derives both the seed (used by WDK)
    * and entropy (original random bytes), then encrypts both for secure storage.
-   * 
+   *
    * @param {Object} request - The RPC request object
    * @param {string} request.mnemonic - BIP39 mnemonic phrase (12 or 24 words)
    * @returns {Promise<Object>} Encrypted seed and entropy with encryption key
    */
-  rpc.onGetSeedAndEntropyFromMnemonic(withErrorHandling(async (request) => {
-    const { mnemonic } = request
-    
-    // Validate request and mnemonic input
-    validateRequest(request, () => validateMnemonic(mnemonic, 'mnemonic'))
-    
-    // Derive seed from mnemonic (used by WDK for wallet operations)
-    const seed = mnemonicToSeedSync(mnemonic)
-    // Extract entropy from mnemonic (original random bytes used to generate mnemonic)
-    const entropy = mnemonicToEntropy(mnemonic, wordlist)
+  rpc.onGetSeedAndEntropyFromMnemonic(
+    withErrorHandling(async (request) => {
+      const { mnemonic } = request
 
-    // Encrypt both secrets and return with the encryption key
-    return encryptSecrets(seed, entropy)
-  }))
+      // Validate request and mnemonic input
+      validateRequest(request, () => validateMnemonic(mnemonic, 'mnemonic'))
+
+      // Derive seed from mnemonic (used by WDK for wallet operations)
+      const seed = mnemonicToSeedSync(mnemonic)
+      // Extract entropy from mnemonic (original random bytes used to generate mnemonic)
+      const entropy = mnemonicToEntropy(mnemonic, wordlist)
+
+      // Encrypt both secrets and return with the encryption key
+      return encryptSecrets(seed, entropy)
+    }),
+  )
 
   /**
    * Initialize WDK with either encryptionKey + encryptedSeed
    */
-  rpc.onInitializeWDK(withErrorHandling(async (init) => {
-    // Validate request object (validation of fields happens below)
-    if (!init || typeof init !== 'object') {
-      throw createErrorWithCode('Init must be an object', ERROR_CODES.BAD_REQUEST)
-    }
-    
-    if (!WDK) {
-      const errorMsg = wdkLoadError
-        ? `WDK failed to load: ${wdkLoadError.message}\nStack: ${wdkLoadError.stack || 'No stack trace'}`
-        : 'WDK not loaded - unknown error during initialization'
-      throw createErrorWithCode(errorMsg, ERROR_CODES.WDK_MANAGER_INIT)
-    }
-    
-    if (handlerContext.wdk) {
-      logger.info('Disposing existing WDK instance...')
-      handlerContext.wdk.dispose()
-    }
-    
-    // Validate config
-    let networkConfigs
-    validateRequest(init, () => {
-      validateNonEmptyString(init.config, 'config')
-      networkConfigs = validateJSON(init.config, 'config')
-      
-      // Validate encrypted seed and encryption key
-      if (!init.encryptionKey || !init.encryptedSeed) {
-        throw createErrorWithCode('(encryptionKey + encryptedSeed) must be provided', ERROR_CODES.BAD_REQUEST)
+  rpc.onInitializeWDK(
+    withErrorHandling(async (init) => {
+      // Validate request object (validation of fields happens below)
+      if (!init || typeof init !== 'object') {
+        throw createErrorWithCode(
+          'Init must be an object',
+          ERROR_CODES.BAD_REQUEST,
+        )
       }
-      validateBase64(init.encryptionKey, 'encryptionKey')
-      validateBase64(init.encryptedSeed, 'encryptedSeed')
-    }, 'Init')
-    
-    const missingNetworks = requiredNetworks.filter(network => !networkConfigs[network])
-    
-    if (missingNetworks.length > 0) {
-      throw createErrorWithCode(`Missing network configurations: ${missingNetworks.join(', ')}`, ERROR_CODES.BAD_REQUEST)
-    }
-    
-    // Initialize from encrypted seed
-    logger.info('Initializing WDK with encrypted seed')
-    let decryptedSeedBuffer
-    try {
-      decryptedSeedBuffer = decrypt(init.encryptedSeed, init.encryptionKey)
-    } catch (error) {
-      throw createErrorWithCode(`Failed to decrypt seed: ${error.message}`, ERROR_CODES.BAD_REQUEST)
-    }
-    
-    handlerContext.wdk = new WDK(decryptedSeedBuffer)
-    
-    for (const [networkName, config] of Object.entries(networkConfigs)) {
-      if (config && typeof config === 'object') {
-        const walletManager = walletManagers[networkName]
-        
-        if (!walletManager) {
-          throw createErrorWithCode(`No wallet manager found for network: ${networkName}`, ERROR_CODES.WDK_MANAGER_INIT)
+
+      if (!WDK) {
+        const errorMsg = wdkLoadError
+          ? `WDK failed to load: ${wdkLoadError.message}\nStack: ${wdkLoadError.stack || 'No stack trace'}`
+          : 'WDK not loaded - unknown error during initialization'
+        throw createErrorWithCode(errorMsg, ERROR_CODES.WDK_MANAGER_INIT)
+      }
+
+      if (handlerContext.wdk) {
+        logger.info('Disposing existing WDK instance...')
+        handlerContext.wdk.dispose()
+      }
+
+      // Validate config
+      let networkConfigs
+      validateRequest(
+        init,
+        () => {
+          validateNonEmptyString(init.config, 'config')
+          networkConfigs = validateJSON(init.config, 'config')
+
+          // Validate encrypted seed and encryption key
+          if (!init.encryptionKey || !init.encryptedSeed) {
+            throw createErrorWithCode(
+              '(encryptionKey + encryptedSeed) must be provided',
+              ERROR_CODES.BAD_REQUEST,
+            )
+          }
+          validateBase64(init.encryptionKey, 'encryptionKey')
+          validateBase64(init.encryptedSeed, 'encryptedSeed')
+        },
+        'Init',
+      )
+
+      const missingNetworks = requiredNetworks.filter(
+        (network) => !networkConfigs[network],
+      )
+
+      if (missingNetworks.length > 0) {
+        throw createErrorWithCode(
+          `Missing network configurations: ${missingNetworks.join(', ')}`,
+          ERROR_CODES.BAD_REQUEST,
+        )
+      }
+
+      // Initialize from encrypted seed
+      logger.info('Initializing WDK with encrypted seed')
+      let decryptedSeedBuffer
+      try {
+        decryptedSeedBuffer = decrypt(init.encryptedSeed, init.encryptionKey)
+      } catch (error) {
+        throw createErrorWithCode(
+          `Failed to decrypt seed: ${error.message}`,
+          ERROR_CODES.BAD_REQUEST,
+        )
+      }
+
+      handlerContext.wdk = new WDK(decryptedSeedBuffer)
+
+      for (const [networkName, config] of Object.entries(networkConfigs)) {
+        if (config && typeof config === 'object') {
+          const walletManager = walletManagers[networkName]
+
+          if (!walletManager) {
+            throw createErrorWithCode(
+              `No wallet manager found for network: ${networkName}`,
+              ERROR_CODES.WDK_MANAGER_INIT,
+            )
+          }
+
+          logger.info(`Registering ${networkName} wallet`)
+          try {
+            handlerContext.wdk.registerWallet(
+              networkName,
+              walletManager,
+              config,
+            )
+          } catch (er) {
+            console.log('==================', er)
+            throw er
+          }
         }
-        
-        logger.info(`Registering ${networkName} wallet`)
-        handlerContext.wdk.registerWallet(networkName, walletManager, config)
       }
-    }
-    
-    logger.info('WDK initialization complete')
-    return { status: 'initialized' }
-  }))
+
+      logger.info('WDK initialization complete')
+      return { status: 'initialized' }
+    }),
+  )
 
   /**
    * Generic handler for all WDK account methods
    * This single handler can call any method on any WDK account dynamically
    * No special handling - just calls the method and returns the raw result
    */
-  rpc.onCallMethod(withErrorHandling(async (payload) => {
-    const { methodName, network, accountIndex, args: argsJson } = payload
-    
-    // Validate request and required fields
-    let args
-    validateRequest(payload, () => {
-      validateNonEmptyString(methodName, 'methodName')
-      validateNonEmptyString(network, 'network')
-      validateNonNegativeInteger(accountIndex, 'accountIndex')
-      
-      // Parse args if provided (JSON string)
-      args = argsJson ? validateJSON(argsJson, 'args') : null
-    }, 'Payload')
-    
-    // Call the method directly - no special handling
-    const result = await callWdkMethod(
-      handlerContext,
-      methodName,
-      network,
-      accountIndex,
-      args
-    )
-    
-    // Return as JSON string (raw result, no transformation)
-    // Use safeStringify to handle BigInt values
-    return { result: safeStringify(result) }
-  }))
+  rpc.onCallMethod(
+    withErrorHandling(async (payload) => {
+      const { methodName, network, accountIndex, args: argsJson } = payload
 
-  rpc.onDispose(withErrorHandling(() => {
-    if (handlerContext.wdk) {
-      handlerContext.wdk.dispose()
-      handlerContext.wdk = null
-    }
-  }))
+      // Validate request and required fields
+      let args
+      validateRequest(
+        payload,
+        () => {
+          validateNonEmptyString(methodName, 'methodName')
+          validateNonEmptyString(network, 'network')
+          validateNonNegativeInteger(accountIndex, 'accountIndex')
+
+          // Parse args if provided (JSON string)
+          args = argsJson ? validateJSON(argsJson, 'args') : null
+        },
+        'Payload',
+      )
+
+      // Call the method directly - no special handling
+      const result = await callWdkMethod(
+        handlerContext,
+        methodName,
+        network,
+        accountIndex,
+        args,
+      )
+
+      // Return as JSON string (raw result, no transformation)
+      // Use safeStringify to handle BigInt values
+      return { result: safeStringify(result) }
+    }),
+  )
+
+  rpc.onDispose(
+    withErrorHandling(() => {
+      if (handlerContext.wdk) {
+        handlerContext.wdk.dispose()
+        handlerContext.wdk = null
+      }
+    }),
+  )
 }
 
 module.exports = {
@@ -365,6 +448,5 @@ module.exports = {
   withErrorHandling,
   validateRequest,
   createErrorWithCode,
-  callWdkMethod
+  callWdkMethod,
 }
-
