@@ -2,9 +2,13 @@
   "version": 1,
   "config": {
     "walletModules": {
+      "evm": {
+        "modulePath": "@tetherto/wdk-wallet-evm",
+        "networks": ["ethereum", "sepolia"]
+      },
       "evmErc4337": {
         "modulePath": "@tetherto/wdk-wallet-evm-erc-4337",
-        "networks": ["ethereum", "polygon", "arbitrum", "plasma", "sepolia"]
+        "networks": ["polygon", "arbitrum", "plasma"]
       },
       "spark": {
         "modulePath": "@tetherto/wdk-wallet-spark",
