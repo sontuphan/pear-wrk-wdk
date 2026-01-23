@@ -298,6 +298,7 @@ function registerRpcHandlers(rpc, context) {
    */
   rpc.onInitializeWDK(
     withErrorHandling(async (init) => {
+      console.log(101)
       // Validate request object (validation of fields happens below)
       if (!init || typeof init !== 'object') {
         throw createErrorWithCode(
@@ -306,6 +307,7 @@ function registerRpcHandlers(rpc, context) {
         )
       }
 
+      console.log(102)
       if (!WDK) {
         const errorMsg = wdkLoadError
           ? `WDK failed to load: ${wdkLoadError.message}\nStack: ${wdkLoadError.stack || 'No stack trace'}`
@@ -313,19 +315,23 @@ function registerRpcHandlers(rpc, context) {
         throw createErrorWithCode(errorMsg, ERROR_CODES.WDK_MANAGER_INIT)
       }
 
+      console.log(103)
       if (handlerContext.wdk) {
         logger.info('Disposing existing WDK instance...')
         handlerContext.wdk.dispose()
       }
 
       // Validate config
+      console.log(104)
       let networkConfigs
       validateRequest(
         init,
         () => {
+          console.log(105)
           validateNonEmptyString(init.config, 'config')
           networkConfigs = validateJSON(init.config, 'config')
 
+          console.log(106)
           // Validate encrypted seed and encryption key
           if (!init.encryptionKey || !init.encryptedSeed) {
             throw createErrorWithCode(
@@ -333,16 +339,19 @@ function registerRpcHandlers(rpc, context) {
               ERROR_CODES.BAD_REQUEST,
             )
           }
+          console.log(107)
           validateBase64(init.encryptionKey, 'encryptionKey')
           validateBase64(init.encryptedSeed, 'encryptedSeed')
         },
         'Init',
       )
 
+      console.log(108)
       const missingNetworks = requiredNetworks.filter(
         (network) => !networkConfigs[network],
       )
 
+      console.log(109)
       if (missingNetworks.length > 0) {
         throw createErrorWithCode(
           `Missing network configurations: ${missingNetworks.join(', ')}`,
@@ -350,6 +359,7 @@ function registerRpcHandlers(rpc, context) {
         )
       }
 
+      console.log(110)
       // Initialize from encrypted seed
       logger.info('Initializing WDK with encrypted seed')
       let decryptedSeedBuffer
@@ -362,8 +372,10 @@ function registerRpcHandlers(rpc, context) {
         )
       }
 
+      console.log(111)
       handlerContext.wdk = new WDK(decryptedSeedBuffer)
 
+      console.log(112)
       for (const [networkName, config] of Object.entries(networkConfigs)) {
         if (config && typeof config === 'object') {
           const walletManager = walletManagers[networkName]
@@ -376,19 +388,11 @@ function registerRpcHandlers(rpc, context) {
           }
 
           logger.info(`Registering ${networkName} wallet`)
-          try {
-            handlerContext.wdk.registerWallet(
-              networkName,
-              walletManager,
-              config,
-            )
-          } catch (er) {
-            console.log('==================', er)
-            throw er
-          }
+          handlerContext.wdk.registerWallet(networkName, walletManager, config)
         }
       }
 
+      console.log(113)
       logger.info('WDK initialization complete')
       return { status: 'initialized' }
     }),
